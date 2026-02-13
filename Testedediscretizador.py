@@ -12,11 +12,10 @@ from scipy.signal import find_peaks
 from scipy.stats import kurtosis
 import random
 from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
-# --- Configurações de Rolamentos (valores mais precisos) ---
+# --- Configurações de Rolamentos (valores precisos) ---
 BEARING_DB = {
     "6203ZZ": {"d_interno": 17, "d_externo": 40, "d_bola": 6.747, "n_bolas": 8},
     "6204ZZ": {"d_interno": 20, "d_externo": 47, "d_bola": 7.938, "n_bolas": 9}
@@ -52,20 +51,17 @@ class FaultPredictor:
             fr = rpm / 60
             age = np.random.uniform(0, 5000)
             
-            # Escolhe rolamento aleatório para variação realista
             b = random.choice(bearings)
             pd_val = (b['d_interno'] + b['d_externo']) / 2
             beta = b['d_bola'] / pd_val
             n_bolas = b['n_bolas']
             
-            # Frequências de falha calculadas corretamente
             bpfo = (n_bolas / 2) * fr * (1 - beta)
             bpfi = (n_bolas / 2) * fr * (1 + beta)
             bsf = (pd_val / b['d_bola']) * fr * (1 - beta**2)
             ftf = 0.5 * fr * (1 - beta)
             f_vals = [bpfo, bpfi, bsf, ftf]
             
-            # Simulação de amplitudes de falha
             base_vib = np.random.normal(0.05, 0.01)
             amps = {cls: (np.random.uniform(0.1, 0.6) if np.random.rand() < 0.25 else 0) 
                     for cls in self.classes[1:]}
@@ -149,7 +145,6 @@ class IntegratedVibrationApp:
         
         tk.Button(self.side_bar, text="EXECUTAR DIAGNÓSTICO ML", command=self.run_ml_diagnostic, bg="#27ae60", fg="white", font=("Arial", 12, "bold")).pack(fill=tk.X, pady=30)
 
-        # Área de plotagem
         self.fig = Figure(figsize=(12, 8), dpi=100)
         self.ax_img = self.fig.add_subplot(211)
         self.ax_spec = self.fig.add_subplot(212)
@@ -177,7 +172,7 @@ class IntegratedVibrationApp:
         messagebox.showinfo("Calibração", "Clique em 3 pontos na imagem:\n\n"
                                          "1. Origem (canto inferior esquerdo do gráfico)\n"
                                          "2. Final do eixo X (mesma altura da origem)\n"
-                                         "3. Um pico de amplitude conhecida")
+                                         "3. Um pico de amplitude conhecida (clique próximo ao topo)")
 
     def on_canvas_click(self, event):
         if event.inaxes != self.ax_img or self.image_np is None:
@@ -192,7 +187,7 @@ class IntegratedVibrationApp:
             "Valor de amplitude conhecida neste pico (g):"
         ]
         
-        val = simpledialog.askfloat(f"Ponto {len(self.calib_points)+1}", prompts[len(self.calib_points)])
+        val = simpledialog.askfloat(f"Ponto {len(self.calib_points)+1}", prompts[len(self.calib_points)], minvalue=0)
         if val is None:
             return
         
@@ -208,12 +203,22 @@ class IntegratedVibrationApp:
             self.digitize_image()
 
     def digitize_image(self):
+        """Extração robusta do envelope superior do espectro"""
         p1, p2, p3 = self.calib_points
         
-        x_start = int(min(p1[0], p2[0], p3[0]) - 20)
-        x_end = int(max(p1[0], p2[0], p3[0]) + 20)
-        y_top = int(min(p1[1], p2[1], p3[1]) - 50)
-        y_base = int(max(p1[1], p2[1], p3[1]) + 50)
+        # Margem maior para garantir captura de barras nas bordas e topo
+        margin_x = 50
+        margin_y = 60
+        
+        # Limites baseados APENAS em P1 e P2 para X (extremos do gráfico)
+        min_x_base = min(p1[0], p2[0])
+        max_x_base = max(p1[0], p2[0])
+        
+        # Crop inclui margem, mas depois filtraremos apenas a região real do gráfico
+        x_start = int(min_x_base - margin_x)
+        x_end = int(max_x_base + margin_x)
+        y_top = int(min(p1[1], p2[1], p3[1]) - margin_y)
+        y_base = int(max(p1[1], p2[1], p3[1]) + margin_y)
         
         x_start = max(0, x_start)
         x_end = min(self.image_np.shape[1], x_end)
@@ -222,41 +227,89 @@ class IntegratedVibrationApp:
         
         crop = self.image_np[y_top:y_base, x_start:x_end]
         if crop.size == 0:
-            messagebox.showerror("Erro", "Crop inválido.")
+            messagebox.showerror("Erro", "Região de crop inválida.")
             return
         
-        thresh = np.mean(crop) - 2 * np.std(crop)
-        self.points = []
+        thresh = np.mean(crop) - 2.5 * np.std(crop)
+        min_thickness = 5
         
+        self.points = []
         for col in range(crop.shape[1]):
             column = crop[:, col]
             dark_idx = np.where(column < thresh)[0]
-            if len(dark_idx) >= 3:
-                median_row = np.median(dark_idx)
-                self.points.append((x_start + col, y_top + median_row))
+            
+            if len(dark_idx) >= min_thickness:
+                top_y = np.min(dark_idx)
+            else:
+                top_y = crop.shape[0] - 1
+            
+            global_y = y_top + top_y
+            global_x = x_start + col
+            self.points.append((global_x, global_y))
         
-        # Overlay da curva extraída
         if self.points:
             xs, ys = zip(*self.points)
-            self.ax_img.plot(xs, ys, color='lime', linewidth=1.5, alpha=0.8)
+            self.ax_img.plot(xs, ys, color='lime', linewidth=2.5, alpha=0.9)
             self.canvas.draw()
         
         self.convert_to_real_units()
 
     def convert_to_real_units(self):
+        if not self.points or len(self.calib_points) < 3:
+            return
+            
         p1, p2, p3 = self.calib_points
         
-        scale_x = (p2[2] - p1[2]) / (p2[0] - p1[0])
-        scale_y = p3[2] / (p3[1] - p1[1]) if (p3[1] - p1[1]) != 0 else 1
+        # Limites STRICT do eixo X (definidos apenas por P1 e P2 - extremos do gráfico)
+        min_x_pixel = min(p1[0], p2[0])
+        max_x_pixel = max(p1[0], p2[0])
+        
+        # Verifica se o pico calibrado está dentro dos limites do gráfico
+        if not (min_x_pixel <= p3[0] <= max_x_pixel):
+            messagebox.showwarning("Aviso", "O ponto de pico (P3) está fora dos limites do eixo X definido por P1 e P2.\n"
+                                           "Recomenda-se clicar em um pico dentro do gráfico.")
+        
+        base_y_pixel = (p1[1] + p2[1]) / 2.0
+        
+        dx_pixel = p2[0] - p1[0]
+        if abs(dx_pixel) < 10:
+            messagebox.showerror("Erro", "Pontos X muito próximos.")
+            return
+        scale_x = (p2[2] - p1[2]) / dx_pixel
+        
+        # Calibração Y usando pico mais alto na janela (apenas dentro dos limites do gráfico)
+        window_radius = 80
+        nearby_points = [pt for pt in self.points 
+                         if abs(pt[0] - p3[0]) < window_radius and min_x_pixel <= pt[0] <= max_x_pixel]
+        
+        if not nearby_points:
+            messagebox.showerror("Erro", "Nenhum ponto detectado próximo ao pico calibrado dentro do gráfico.")
+            return
+        
+        peak_digit_py = min(py for _, py in nearby_points)
+        
+        delta_pixel_y = base_y_pixel - peak_digit_py
+        if delta_pixel_y <= 20:
+            messagebox.showerror("Erro", "Pico calibrado detectado muito baixo.")
+            return
+        
+        scale_y = p3[2] / delta_pixel_y
         
         self.real_data = []
         for px, py in self.points:
-            rx = p1[2] + (px - p1[0]) * scale_x
-            ry = (py - p1[1]) * scale_y
-            if rx >= 0 and ry >= 0:
-                self.real_data.append((rx, ry))
+            # FILTRA RIGOROSAMENTE: só pontos dentro dos extremos P1-P2 (ignora tudo fora do gráfico)
+            if min_x_pixel <= px <= max_x_pixel:
+                rx = p1[2] + (px - p1[0]) * scale_x
+                ry = (base_y_pixel - py) * scale_y
+                ry = max(0.0, ry)
+                if rx >= 0:
+                    self.real_data.append((rx, ry))
         
         self.real_data.sort(key=lambda x: x[0])
+        
+        # Marca o pico usado para calibração Y
+        self.ax_img.plot(p3[0], peak_digit_py, 'co', markersize=12, alpha=0.8)
+        
         self.update_plots()
 
     def load_csv(self):
@@ -296,7 +349,6 @@ class IntegratedVibrationApp:
         pd_val = (b['d_interno'] + b['d_externo']) / 2
         beta = b['d_bola'] / pd_val
         
-        # Frequências de falha corrigidas (BSF sem /2 extra)
         f_targets = {
             'BPFO': (b['n_bolas']/2) * fr * (1 - beta),
             'BPFI': (b['n_bolas']/2) * fr * (1 + beta),
@@ -304,7 +356,6 @@ class IntegratedVibrationApp:
             'FTF':  0.5 * fr * (1 - beta)
         }
         
-        # Atualiza gráfico com marcas e picos
         self.update_plots()
         freqs, amps = zip(*self.real_data)
         freqs = np.array(freqs)
@@ -315,17 +366,15 @@ class IntegratedVibrationApp:
                 self.ax_spec.axvline(f, color='red', linestyle='--', linewidth=2, alpha=0.8)
                 self.ax_spec.text(f, max(amps)*0.95, name, color='red', fontsize=10, rotation=90, va='top', ha='left')
         
-        # Detecção de picos
         peaks, _ = find_peaks(amps, prominence=0.05*np.ptp(amps), distance=len(amps)//50)
         self.ax_spec.plot(freqs[peaks], amps[peaks], "o", color='magenta', markersize=6)
         
         self.canvas.draw()
         
-        # Features
         rms = np.sqrt(np.mean(amps**2))
         peak = np.max(amps)
         cf = peak / rms if rms > 0 else 0
-        kurt = kurtosis(amps) + 3  # excess + 3 → kurtosis total
+        kurt = kurtosis(amps) + 3
         
         amps_at_f = []
         for ft in f_targets.values():
