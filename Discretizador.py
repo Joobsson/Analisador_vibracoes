@@ -310,8 +310,8 @@ class GraphDigitizer:
             N, d, pd = p["N"], p["d"], p["pd"]
             fr = rpm / 60
 
-            BPFO = (N / 2) * fr * (1 - (d / pd))
-            BPFI = (N / 2) * fr * (1 + (d / pd))
+            BPFO = (N / 2) * fr * (1 + (d / pd))
+            BPFI = (N / 2) * fr * (1 - (d / pd))
             BSF = (pd / (2 * d)) * fr * (1 - ((d / pd)**2))
             FTF = (1 / 2) * fr * (1 - (d / pd))
 

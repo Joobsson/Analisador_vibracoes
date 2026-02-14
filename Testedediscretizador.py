@@ -346,9 +346,9 @@ class IntegratedVibrationApp:
         beta = b['d_bola'] / pd_val
         
         f_targets = {
-            'BPFO': (b['n_bolas']/2) * fr * (1 - beta),
-            'BPFI': (b['n_bolas']/2) * fr * (1 + beta),
-            'BSF':  (pd_val / b['d_bola']) * fr * (1 - beta**2),
+            'BPFO': (b['n_bolas']/2) * fr * (1 + beta),
+            'BPFI': (b['n_bolas']/2) * fr * (1 - beta),
+            'BSF':  (pd_val / (2 * b['d_bola'])) * fr * (1 - beta**2),
             'FTF':  0.5 * fr * (1 - beta)
         }
         
