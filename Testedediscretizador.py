@@ -172,7 +172,7 @@ class IntegratedVibrationApp:
         messagebox.showinfo("Calibração", "Clique em 3 pontos na imagem:\n\n"
                                          "1. Origem (canto inferior esquerdo do gráfico)\n"
                                          "2. Final do eixo X (mesma altura da origem)\n"
-                                         "3. Um pico de amplitude conhecida (clique próximo ao topo)")
+                                         "3. Pico de amplitude conhecida (preferencialmente o mais alto ou um pico extremo)")
 
     def on_canvas_click(self, event):
         if event.inaxes != self.ax_img or self.image_np is None:
@@ -206,15 +206,12 @@ class IntegratedVibrationApp:
         """Extração robusta do envelope superior do espectro"""
         p1, p2, p3 = self.calib_points
         
-        # Margem maior para garantir captura de barras nas bordas e topo
         margin_x = 50
         margin_y = 60
         
-        # Limites baseados APENAS em P1 e P2 para X (extremos do gráfico)
         min_x_base = min(p1[0], p2[0])
         max_x_base = max(p1[0], p2[0])
         
-        # Crop inclui margem, mas depois filtraremos apenas a região real do gráfico
         x_start = int(min_x_base - margin_x)
         x_end = int(max_x_base + margin_x)
         y_top = int(min(p1[1], p2[1], p3[1]) - margin_y)
@@ -260,14 +257,12 @@ class IntegratedVibrationApp:
             
         p1, p2, p3 = self.calib_points
         
-        # Limites STRICT do eixo X (definidos apenas por P1 e P2 - extremos do gráfico)
         min_x_pixel = min(p1[0], p2[0])
         max_x_pixel = max(p1[0], p2[0])
         
-        # Verifica se o pico calibrado está dentro dos limites do gráfico
         if not (min_x_pixel <= p3[0] <= max_x_pixel):
-            messagebox.showwarning("Aviso", "O ponto de pico (P3) está fora dos limites do eixo X definido por P1 e P2.\n"
-                                           "Recomenda-se clicar em um pico dentro do gráfico.")
+            messagebox.showwarning("Aviso", "O ponto de pico (P3) está fora dos limites do eixo X.\n"
+                                           "Isso pode afetar a precisão.")
         
         base_y_pixel = (p1[1] + p2[1]) / 2.0
         
@@ -277,7 +272,7 @@ class IntegratedVibrationApp:
             return
         scale_x = (p2[2] - p1[2]) / dx_pixel
         
-        # Calibração Y usando pico mais alto na janela (apenas dentro dos limites do gráfico)
+        # Calibração Y usando o pico mais alto detectado na região do clique
         window_radius = 80
         nearby_points = [pt for pt in self.points 
                          if abs(pt[0] - p3[0]) < window_radius and min_x_pixel <= pt[0] <= max_x_pixel]
@@ -293,21 +288,22 @@ class IntegratedVibrationApp:
             messagebox.showerror("Erro", "Pico calibrado detectado muito baixo.")
             return
         
-        scale_y = p3[2] / delta_pixel_y
+        scale_y = p3[2] / delta_pixel_y  # O pico marcado tem EXATAMENTE a amplitude informada
         
         self.real_data = []
         for px, py in self.points:
-            # FILTRA RIGOROSAMENTE: só pontos dentro dos extremos P1-P2 (ignora tudo fora do gráfico)
             if min_x_pixel <= px <= max_x_pixel:
                 rx = p1[2] + (px - p1[0]) * scale_x
-                ry = (base_y_pixel - py) * scale_y
+                ry_raw = (base_y_pixel - py) * scale_y
+                # FORÇA: NADA ACIMA DO P3 (o ponto marcado é tratado como extremo)
+                ry = min(ry_raw, p3[2])
                 ry = max(0.0, ry)
                 if rx >= 0:
                     self.real_data.append((rx, ry))
         
         self.real_data.sort(key=lambda x: x[0])
         
-        # Marca o pico usado para calibração Y
+        # Marca o pico usado para calibração
         self.ax_img.plot(p3[0], peak_digit_py, 'co', markersize=12, alpha=0.8)
         
         self.update_plots()
