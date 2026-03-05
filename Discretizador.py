@@ -10,6 +10,7 @@ import os
 import joblib
 from scipy.signal import find_peaks
 from scipy.stats import kurtosis
+from scipy.interpolate import interp1d # --- IMPORT ADICIONADO PARA ENVELOPE ---
 import random
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
@@ -144,6 +145,10 @@ class IntegratedVibrationApp:
         self.ent_age.pack(fill=tk.X, pady=5)
         
         tk.Button(self.side_bar, text="EXECUTAR DIAGNÓSTICO", command=self.run_ml_diagnostic, bg="#27ae60", fg="white", font=("Arial", 12, "bold")).pack(fill=tk.X, pady=30)
+        
+        # --- NOVOS BOTÕES ADICIONADOS ---
+        tk.Button(self.side_bar, text="ANÁLISE DE ENVELOPE", command=self.run_envelope_analysis, bg="#8e44ad", fg="white", font=("Arial", 10, "bold")).pack(fill=tk.X, pady=5)
+        tk.Button(self.side_bar, text="EXPORTAR PARA EXCEL", command=self.export_to_excel, bg="#16a085", fg="white", font=("Arial", 10, "bold")).pack(fill=tk.X, pady=5)
 
         self.fig = Figure(figsize=(12, 8), dpi=100)
         self.ax_img = self.fig.add_subplot(211)
@@ -455,6 +460,97 @@ class IntegratedVibrationApp:
         canvas_dash.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
         tk.Label(dash, text=f"VEREDITO: {veredito}", font=("Arial", 18, "bold"), fg=cor).pack(pady=20)
+
+    # --- FUNÇÕES ADICIONADAS CONFORME SOLICITAÇÃO ---
+
+    def export_to_excel(self):
+        """Exporta os dados discretizados e parâmetros de ensaio para Excel de forma rigorosa."""
+        if not self.real_data:
+            messagebox.showerror("Erro de Exportação", "Não há dados estruturados para exportar. Calibre uma imagem primeiro.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Planilha Excel", "*.xlsx")],
+            title="Salvar Laudo Físico"
+        )
+        
+        if not file_path:
+            return
+
+        try:
+            freqs, amps = zip(*self.real_data)
+            df_espectro = pd.DataFrame({'Frequencia_Hz': freqs, 'Amplitude_g': amps})
+
+            # Metadados físicos fundamentais
+            rpm = float(self.ent_rpm.get())
+            fr = rpm / 60
+            b = BEARING_DB[self.combo_bearing.get()]
+            pd_val = (b['d_interno'] + b['d_externo']) / 2
+            beta = b['d_bola'] / pd_val
+            
+            info_ensaio = {
+                'Parâmetro_Cinemático': ['Data do Laudo', 'Modelo', 'RPM', 'Frequência Rotacional (1x)', 'BPFO Teórica', 'BPFI Teórica', 'BSF Teórica', 'FTF Teórica'],
+                'Grandeza_Física': [
+                    pd.Timestamp.now().strftime('%d/%m/%Y %H:%M:%S'),
+                    self.combo_bearing.get(),
+                    f"{rpm} RPM",
+                    f"{fr:.2f} Hz",
+                    f"{(b['n_bolas']/2) * fr * (1 + beta):.2f} Hz",
+                    f"{(b['n_bolas']/2) * fr * (1 - beta):.2f} Hz",
+                    f"{(pd_val / (2 * b['d_bola'])) * fr * (1 - beta**2):.2f} Hz",
+                    f"{0.5 * fr * (1 - beta):.2f} Hz"
+                ]
+            }
+            df_info = pd.DataFrame(info_ensaio)
+
+            with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
+                df_info.to_excel(writer, sheet_name='Metadados Físicos', index=False)
+                df_espectro.to_excel(writer, sheet_name='Discretização Matricial', index=False)
+
+            messagebox.showinfo("Auditoria", f"Dados físico-matemáticos exportados para:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Erro Catastrófico", f"Falha na manipulação do tensor de dados: {str(e)}")
+
+    def run_envelope_analysis(self):
+        """Aplica a técnica de Envoltória Espectral para isolamento de portadoras e bandas laterais."""
+        if not self.real_data:
+            messagebox.showerror("Erro", "O domínio da frequência está vazio.")
+            return
+
+        try:
+            freqs, amps = zip(*self.real_data)
+            freqs = np.array(freqs)
+            amps = np.array(amps)
+
+            # Extração dos máximos locais para contorno morfológico
+            peaks, _ = find_peaks(amps, distance=max(1, len(amps)//100), prominence=0.01*np.ptp(amps))
+            
+            if len(peaks) < 3:
+                messagebox.showwarning("Atenção", "Densidade de picos insuficiente para interpolar a envoltória.")
+                return
+
+            # Interpolação por Splines Cúbicas para traçado do Envelope Espectral
+            interpolador = interp1d(freqs[peaks], amps[peaks], kind='cubic', fill_value="extrapolate")
+            envelope_curve = interpolador(freqs)
+            
+            # Impedir valores negativos na extrapolação matemática
+            envelope_curve = np.maximum(envelope_curve, 0)
+
+            self.ax_spec.clear()
+            self.ax_spec.plot(freqs, amps, color='gray', alpha=0.5, label='Espectro Base')
+            self.ax_spec.plot(freqs, envelope_curve, color='purple', linewidth=2.5, label='Envoltória (Spline Cúbica)')
+            
+            self.ax_spec.set_title("Demodulação Morfológica: Extração da Envoltória", fontsize=14)
+            self.ax_spec.set_xlabel("Frequência (Hz)")
+            self.ax_spec.set_ylabel("Energia Espectral (g)")
+            self.ax_spec.grid(True, linestyle='--', alpha=0.6)
+            self.ax_spec.legend(loc='upper right')
+            self.canvas.draw()
+            
+            messagebox.showinfo("Sistemas Dinâmicos", "A Transformação morfológica da envoltória foi aplicada com sucesso sobre a malha discreta.")
+        except Exception as e:
+            messagebox.showerror("Inconsistência Analítica", f"Erro no cômputo do limite superior: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
