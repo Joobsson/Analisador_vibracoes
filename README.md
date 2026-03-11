@@ -1,5 +1,5 @@
 """
-UFSJ-CAP — Sistema Integrado de Diagnóstico e Prognóstico de Rolamentos
+Sistema Integrado de Diagnóstico e Prognóstico de Rolamentos
 
 Fluxo completo do sistema:
 
